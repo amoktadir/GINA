@@ -57,18 +57,27 @@ def whiten_grey_values(grey_value, model="typical"):
 def calculate_direct_influence(matrix):
     """Calculate direct influence coefficients"""
     col_sums = matrix.sum(axis=0)
+    # Avoid division by zero
+    col_sums[col_sums == 0] = 1
     return matrix / col_sums
 
 def calculate_complete_influence(direct_matrix):
     """Calculate complete influence coefficients"""
     identity = np.eye(direct_matrix.shape[0])
-    return np.linalg.inv(identity - direct_matrix) - identity
+    try:
+        return np.linalg.inv(identity - direct_matrix) - identity
+    except np.linalg.LinAlgError:
+        # If matrix is singular, use pseudo-inverse
+        return np.linalg.pinv(identity - direct_matrix) - identity
 
 def calculate_responsibility_coefficients(complete_matrix):
     """Calculate grey responsibility coefficients"""
     col_sums = complete_matrix.sum(axis=0)
     total_sum = complete_matrix.sum()
     n = complete_matrix.shape[0]
+    # Avoid division by zero
+    if total_sum == 0:
+        return np.zeros(n)
     return col_sums / (total_sum / n)
 
 def calculate_influence_coefficients(complete_matrix):
@@ -76,6 +85,9 @@ def calculate_influence_coefficients(complete_matrix):
     row_sums = complete_matrix.sum(axis=1)
     total_sum = complete_matrix.sum()
     n = complete_matrix.shape[0]
+    # Avoid division by zero
+    if total_sum == 0:
+        return np.zeros(n)
     return row_sums / (total_sum / n)
 
 def calculate_importance_coefficients(resp_coeffs, inf_coeffs):
@@ -248,14 +260,16 @@ elif section == "Data Input":
             st.subheader("Influence Matrix Setup")
             st.write("For each respondent, provide influence ratings between factors (1-5 scale)")
             
-            # Create empty data structure
-            data = {factor: [] for factor in factors}
+            # Create all possible factor pairs
+            factor_pairs = [f"{inf}→{infl}" for inf in factors for infl in factors]
+            
+            # Initialize data dictionary with all factor pairs
+            data = {pair: [] for pair in factor_pairs}
             data['Respondent'] = []
             
             # Create input matrix for each respondent
             for resp in range(num_respondents):
                 st.markdown(f"### Respondent {resp+1}")
-                resp_data = {}
                 
                 # Create a matrix input
                 cols = st.columns(num_factors + 1)
@@ -267,6 +281,7 @@ elif section == "Data Input":
                     with cols[i+1]:
                         st.write(factor)
                 
+                resp_data = {}
                 for i, influenced in enumerate(factors):
                     row_cols = st.columns(num_factors + 1)
                     with row_cols[0]:
@@ -278,18 +293,21 @@ elif section == "Data Input":
                                 min_value=1, max_value=5, value=3,
                                 key=f"resp{resp}_{i}_{j}"
                             )
-                            resp_data[f"{influencer}→{influenced}"] = rating
+                            pair_key = f"{influencer}→{influenced}"
+                            resp_data[pair_key] = rating
                 
                 # Store respondent data
-                for key, value in resp_data.items():
-                    data[key].append(value)
+                for pair in factor_pairs:
+                    data[pair].append(resp_data[pair])
                 data['Respondent'].append(f"R{resp+1}")
             
             # Convert to DataFrame
             df = pd.DataFrame(data)
             st.session_state.raw_data = df
-            st.session_state.factor_cols = [f"{inf}→{infl}" for inf in factors for infl in factors]
+            st.session_state.factor_cols = factor_pairs
             st.session_state.id_col = "Respondent"
+            
+            st.success("Data collection complete! Proceed to Analysis Configuration.")
 
 # Analysis Configuration section
 elif section == "Analysis Configuration":
@@ -317,12 +335,14 @@ elif section == "Analysis Configuration":
                 # Get data
                 df = st.session_state.raw_data
                 factor_pairs = st.session_state.factor_cols
+                factors = st.session_state.factors
                 
                 # Convert ratings to grey scales
                 grey_data = {}
                 for pair in factor_pairs:
-                    grey_values = [convert_to_grey(rating) for rating in df[pair]]
-                    grey_data[pair] = grey_values
+                    if pair in df.columns:
+                        grey_values = [convert_to_grey(rating) for rating in df[pair]]
+                        grey_data[pair] = grey_values
                 
                 # Aggregate grey responses
                 aggregated = {}
@@ -335,14 +355,14 @@ elif section == "Analysis Configuration":
                     whitened[pair] = whiten_grey_values(grey_value, whitening_model)
                 
                 # Create influence matrix
-                n = len(st.session_state.factors)
+                n = len(factors)
                 influence_matrix = np.zeros((n, n))
                 
-                factors = st.session_state.factors
                 for i, influencer in enumerate(factors):
                     for j, influenced in enumerate(factors):
                         pair = f"{influencer}→{influenced}"
-                        influence_matrix[j, i] = whitened[pair]  # j,i because we want column j to be influenced by row i
+                        if pair in whitened:
+                            influence_matrix[j, i] = whitened[pair]  # j,i because we want column j to be influenced by row i
                 
                 # Calculate direct influence coefficients
                 direct_matrix = calculate_direct_influence(influence_matrix)
