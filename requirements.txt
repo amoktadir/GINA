@@ -5,3 +5,4 @@ seaborn>=0.13.0
 matplotlib>=3.7.0
 graphviz>=0.20.1
 python-docx==0.8.11
+fpdf>=1.7.2
